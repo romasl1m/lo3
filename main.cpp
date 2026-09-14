@@ -2,6 +2,7 @@
 #include <sqlite3.h>
 #include <crypt.h>
 #include <string>
+#include <fstream>
 #include <mutex>
 #include <sstream>
 #include <random>
@@ -92,7 +93,7 @@ static bool db_exec(const std::string &sql) {
 }
 
 static void init_db() {
-    sqlite3_open("../events.db", &g_db);
+    sqlite3_open("events.db", &g_db);
     db_exec("PRAGMA journal_mode=WAL");
     db_exec("PRAGMA foreign_keys=ON");
 
@@ -324,7 +325,7 @@ int main() {
 
     CROW_ROUTE(app, "/static/style.css")
     ([] {
-        std::ifstream f("../static/style.css");
+        std::ifstream f("static/style.css");
         if (!f)
             return crow::response(404);
         std::string css((std::istreambuf_iterator<char>(f)),
