@@ -9,12 +9,13 @@ body {
 }
 
 nav {
-    background: #222;
+    background: #fff;
     padding: 0 2rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
     height: 52px;
+    border-bottom: 1px solid #ddd;
 }
 
 .nav-left, .nav-right {
@@ -24,12 +25,12 @@ nav {
 }
 
 nav a {
-    color: #ddd;
+    color: #333;
     text-decoration: none;
     font-size: 15px;
 }
 
-nav a:hover { color: #fff; }
+nav a:hover { color: #000; }
 
 nav a.nav-brand {
     display: flex;
@@ -44,14 +45,14 @@ nav a.nav-brand {
 }
 
 .nav-user {
-    color: #999;
+    color: #666;
     font-size: 14px;
 }
 
 .nav-divider {
     width: 1px;
     height: 18px;
-    background: #444;
+    background: #ddd;
 }
 
 .container {
