@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: event-registration
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /login
+    disk:
+      name: event-registration-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: DATABASE_PATH
+        value: /var/data/events.db

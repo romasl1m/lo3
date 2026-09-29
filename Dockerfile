@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     libasio-dev \
     libsqlite3-dev \
     sqlite3 \
+    openssl \
     libcurl4-openssl-dev \
     nlohmann-json3-dev \
     && rm -rf /var/lib/apt/lists/*

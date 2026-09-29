@@ -10,6 +10,7 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 struct User {
     int id;
@@ -93,7 +94,8 @@ static bool db_exec(const std::string &sql) {
 }
 
 static void init_db() {
-    sqlite3_open("events.db", &g_db);
+    const char *db_path = std::getenv("DATABASE_PATH");
+    sqlite3_open(db_path && *db_path ? db_path : "events.db", &g_db);
     db_exec("PRAGMA journal_mode=WAL");
     db_exec("PRAGMA foreign_keys=ON");
 
@@ -1206,5 +1208,7 @@ int main() {
         return crow::response(os.str());
     });
 
-    app.port(8080).multithreaded().run();
+    const char *port_env = std::getenv("PORT");
+    int port = port_env && *port_env ? std::stoi(port_env) : 8080;
+    app.port(port).multithreaded().run();
 }
