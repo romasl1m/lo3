@@ -277,7 +277,7 @@ static std::string nav_html(const User &u) {
 <link rel="stylesheet" href="/static/style.css">
 <title>Rejestracja na wydarzenia</title>
 </head><body><nav><div class="nav-left">)";
-    os << "<a class=\"nav-brand\" href=\"/\">EventReg</a>";
+    os << "<a class=\"nav-brand\" href=\"/\"><img src=\"/logo.png\" alt=\"EventReg\"></a>";
     if (u.id) {
         os << "<a href=\"/\">Wydarzenia</a>";
         if (u.role == "admin")
@@ -334,6 +334,18 @@ int main() {
                         std::istreambuf_iterator<char>());
         crow::response res(css);
         res.add_header("Content-Type", "text/css");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/logo.png")
+    ([] {
+        std::ifstream f("logo.png", std::ios::binary);
+        if (!f)
+            return crow::response(404);
+        std::string image((std::istreambuf_iterator<char>(f)),
+                          std::istreambuf_iterator<char>());
+        crow::response res(image);
+        res.add_header("Content-Type", "image/png");
         return res;
     });
 

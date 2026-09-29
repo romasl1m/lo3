@@ -32,10 +32,15 @@ nav a {
 nav a:hover { color: #fff; }
 
 nav a.nav-brand {
-    font-weight: 700;
-    color: #fff;
-    font-size: 16px;
+    display: flex;
+    align-items: center;
     margin-right: 1rem;
+}
+
+.nav-brand img {
+    display: block;
+    height: 28px;
+    width: auto;
 }
 
 .nav-user {
@@ -291,6 +296,7 @@ code {
 
 @media (max-width: 640px) {
     nav { padding: 0 1rem; }
+    .nav-brand img { height: 20px; }
     .container { padding: 1.5rem 1rem; }
     h1 { font-size: 22px; }
     .card { padding: 1rem; }
