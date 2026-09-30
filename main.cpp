@@ -8,6 +8,7 @@
 #include <random>
 #include <unordered_map>
 #include <vector>
+#include <set>
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -131,6 +132,14 @@ static void init_db() {
             UNIQUE(event_id, user_id)
         )
     )");
+
+    db_exec(R"(
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    )");
+    db_exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('max_events_per_user', '3')");
 }
 
 static User get_user_by_id(int id) {
@@ -218,6 +227,17 @@ static void promote_waitlist(int event_id) {
         sqlite3_finalize(stmt);
         reg++;
     }
+}
+
+static int get_max_events_per_user() {
+    sqlite3_stmt *stmt;
+    sqlite3_prepare_v2(g_db, "SELECT value FROM settings WHERE key='max_events_per_user'",
+                       -1, &stmt, nullptr);
+    int val = 3;
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+        val = std::stoi((const char *)sqlite3_column_text(stmt, 0));
+    sqlite3_finalize(stmt);
+    return std::max(1, val);
 }
 
 static User get_current_user(const crow::request &req) {
@@ -453,57 +473,209 @@ int main() {
         if (not u.id)
             return require_login();
 
+        std::unordered_map<int, std::string> my_regs;
+        sqlite3_stmt *stmt;
+        sqlite3_prepare_v2(g_db,
+            "SELECT event_id, status FROM registrations WHERE user_id=?",
+            -1, &stmt, nullptr);
+        sqlite3_bind_int(stmt, 1, u.id);
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+            my_regs[sqlite3_column_int(stmt, 0)] =
+                (const char *)sqlite3_column_text(stmt, 1);
+        sqlite3_finalize(stmt);
+
+        int max_ev = get_max_events_per_user();
+
         std::ostringstream os;
         os << nav_html(u);
-        os << "<h1>Nadchodzace wydarzenia</h1>";
+        os << "<h1>Wydarzenia</h1>"
+           << "<p class=\"page-sub\">Zaznacz wydarzenia, w ktorych chcesz wziac udzial (maks. "
+           << max_ev << "). "
+           << "Nie mozna wybrac dwoch w tym samym czasie.</p>"
+           << "<form method=\"POST\" action=\"/register-multiple\" id=\"ef\">"
+           << "<input type=\"hidden\" name=\"_s\" value=\"1\">";
 
-        sqlite3_stmt *stmt;
-        sqlite3_prepare_v2(g_db, "SELECT id, topic, description, time, organizer, max_people FROM events ORDER BY id DESC", -1, &stmt, nullptr);
+        sqlite3_prepare_v2(g_db,
+            "SELECT id, topic, description, time, organizer, max_people "
+            "FROM events ORDER BY time ASC, id ASC",
+            -1, &stmt, nullptr);
 
+        std::string last_time;
         bool any = false;
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             any = true;
             int eid = sqlite3_column_int(stmt, 0);
             std::string topic = (const char *)sqlite3_column_text(stmt, 1);
             std::string desc = (const char *)sqlite3_column_text(stmt, 2);
-            std::string time = (const char *)sqlite3_column_text(stmt, 3);
+            std::string time_str = (const char *)sqlite3_column_text(stmt, 3);
             std::string org = (const char *)sqlite3_column_text(stmt, 4);
             int maxp = sqlite3_column_int(stmt, 5);
             int reg = count_registered(eid);
             int spots = maxp - reg;
 
-            // Count waitlisted
-            sqlite3_stmt *ws;
-            sqlite3_prepare_v2(g_db,
-                               "SELECT COUNT(*) FROM registrations WHERE event_id=? AND status='waitlisted'",
-                               -1, &ws, nullptr);
-            sqlite3_bind_int(ws, 1, eid);
-            sqlite3_step(ws);
-            int wcount = sqlite3_column_int(ws, 0);
-            sqlite3_finalize(ws);
+            auto it = my_regs.find(eid);
+            bool is_mine = (it != my_regs.end());
+            std::string my_status = is_mine ? it->second : "";
 
-            os << "<div class=\"card\">"
-               << "<h3>" << html_escape(topic) << "</h3>"
-               << "<p class=\"meta\">"
-               << "<strong>Organizator:</strong> " << html_escape(org)
-               << " &mdash; <strong>Czas:</strong> " << html_escape(time) << "</p>"
-               << "<p>" << html_escape(desc) << "</p>"
-               << "<p>" << reg << "/" << maxp << " zapisanych. ";
+            std::string display_time = time_str;
+            auto sp = time_str.find(' ');
+            if (sp != std::string::npos)
+                display_time = time_str.substr(sp + 1);
+
+            if (time_str != last_time) {
+                if (!last_time.empty()) os << "</div>";
+                os << "<div class=\"time-group\">"
+                   << "<div class=\"time-label\">" << html_escape(display_time) << "</div>";
+                last_time = time_str;
+            }
+
+            os << "<div class=\"event-pick" << (is_mine ? " on" : "") << "\">"
+               << "<input type=\"checkbox\" name=\"events\" value=\"" << eid
+               << "\" data-time=\"" << html_escape(time_str) << "\""
+               << (is_mine ? " checked" : "") << ">"
+               << "<div class=\"ep-body\">"
+               << "<div class=\"ep-top\">"
+               << "<span class=\"ep-title\">" << html_escape(topic) << "</span>"
+               << "<a href=\"/event/" << eid << "\" class=\"ep-detail\">szczegoly &rsaquo;</a>"
+               << "</div>"
+               << "<div class=\"ep-meta\">" << html_escape(org)
+               << " &middot; " << reg << "/" << maxp;
             if (spots > 0)
-                os << badge(std::to_string(spots) + " wolnych miejsc", "green");
+                os << " &middot; " << spots << " wolnych";
             else
-                os << badge("Pelne", "red")
-                   << " " << badge(std::to_string(wcount) + " w kolejce", "yellow");
-            os << "</p>"
-               << "<a class=\"btn\" href=\"/event/" << eid << "\">Zobacz i zapisz sie</a>"
-               << "</div>";
+                os << " &middot; <span class=\"ep-full\">pelne</span>";
+            os << "</div>";
+            if (!desc.empty())
+                os << "<div class=\"ep-desc\">" << html_escape(desc) << "</div>";
+            if (is_mine)
+                os << "<div class=\"ep-status "
+                   << (my_status == "registered" ? "ep-reg" : "ep-wait") << "\">"
+                   << (my_status == "registered" ? "Zapisany" : "W kolejce") << "</div>";
+            os << "</div></div>";
         }
         sqlite3_finalize(stmt);
 
-        if (!any)
-            os << "<p class=\"muted\">Brak wydarzen.</p>";
+        if (!last_time.empty()) os << "</div>";
+        if (!any) os << "<p class=\"muted\">Brak wydarzen.</p>";
+
+        os << "<div style=\"height:80px\"></div></form>"
+           << "<div class=\"sel-bar\" id=\"sb\">"
+           << "<span>Wybrano: <strong id=\"sc\">0</strong></span>"
+           << "<button type=\"submit\" form=\"ef\" class=\"btn\">Zapisz sie</button>"
+           << "</div>";
+
+        os << "<script>\n!function(){\nvar mx=" << max_ev << R"(,
+bs=document.querySelectorAll('input[name="events"]'),
+    bar=document.getElementById('sb'),
+    cnt=document.getElementById('sc');
+function up(){
+  var ts={},n=0;
+  bs.forEach(function(b){if(b.checked){ts[b.dataset.time]=1;n++}});
+  bs.forEach(function(b){
+    var r=b.closest('.event-pick');
+    if(!b.checked&&(ts[b.dataset.time]||n>=mx)){b.disabled=1;r.classList.add('off')}
+    else{b.disabled=0;r.classList.remove('off')}
+    r.classList.toggle('on',b.checked)
+  });
+  cnt.textContent=n+'/'+mx;
+  bar.classList.toggle('vis',n>0)
+}
+bs.forEach(function(b){b.addEventListener('change',up)});
+document.querySelectorAll('.event-pick').forEach(function(el){
+  el.addEventListener('click',function(e){
+    if(e.target.closest('a')||e.target.type==='checkbox')return;
+    var cb=el.querySelector('input');
+    if(cb.disabled)return;
+    cb.checked=!cb.checked;
+    cb.dispatchEvent(new Event('change'))
+  })
+});
+up()
+}()
+</script>)";
+
         os << foot;
         return crow::response(os.str());
+    });
+
+    CROW_ROUTE(app, "/register-multiple").methods(crow::HTTPMethod::POST)
+    ([](const crow::request &req) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        User u = get_current_user(req);
+        if (!u.id) return require_login();
+        if (req.body.find("_s=1") == std::string::npos)
+            return redirect("/");
+
+        int max_ev = get_max_events_per_user();
+
+        std::set<int> selected;
+        {
+            std::string b = req.body;
+            size_t pos = 0;
+            while (pos < b.size()) {
+                size_t eq = b.find("events=", pos);
+                if (eq == std::string::npos) break;
+                if (eq > 0 && b[eq - 1] != '&') { pos = eq + 7; continue; }
+                size_t vs = eq + 7;
+                size_t ve = b.find('&', vs);
+                std::string val = b.substr(vs, ve == std::string::npos ? std::string::npos : ve - vs);
+                try { selected.insert(std::stoi(val)); } catch (...) {}
+                if (ve == std::string::npos) break;
+                pos = ve + 1;
+            }
+        }
+
+        if ((int)selected.size() > max_ev)
+            return redirect("/");
+
+        std::unordered_map<int, std::string> current;
+        sqlite3_stmt *stmt;
+        sqlite3_prepare_v2(g_db,
+            "SELECT event_id, status FROM registrations WHERE user_id=?",
+            -1, &stmt, nullptr);
+        sqlite3_bind_int(stmt, 1, u.id);
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+            current[sqlite3_column_int(stmt, 0)] =
+                (const char *)sqlite3_column_text(stmt, 1);
+        sqlite3_finalize(stmt);
+
+        for (int eid : selected) {
+            if (current.count(eid)) continue;
+            sqlite3_prepare_v2(g_db, "SELECT max_people FROM events WHERE id=?",
+                               -1, &stmt, nullptr);
+            sqlite3_bind_int(stmt, 1, eid);
+            if (sqlite3_step(stmt) != SQLITE_ROW) { sqlite3_finalize(stmt); continue; }
+            int maxp = sqlite3_column_int(stmt, 0);
+            sqlite3_finalize(stmt);
+
+            int reg = count_registered(eid);
+            std::string status = (reg < maxp) ? "registered" : "waitlisted";
+
+            sqlite3_prepare_v2(g_db,
+                "INSERT OR IGNORE INTO registrations (event_id, user_id, status) VALUES (?, ?, ?)",
+                -1, &stmt, nullptr);
+            sqlite3_bind_int(stmt, 1, eid);
+            sqlite3_bind_int(stmt, 2, u.id);
+            sqlite3_bind_text(stmt, 3, status.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+
+        for (auto &[eid, st] : current) {
+            if (selected.count(eid)) continue;
+            sqlite3_prepare_v2(g_db,
+                "DELETE FROM registrations WHERE event_id=? AND user_id=?",
+                -1, &stmt, nullptr);
+            sqlite3_bind_int(stmt, 1, eid);
+            sqlite3_bind_int(stmt, 2, u.id);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+
+            if (st == "registered")
+                promote_waitlist(eid);
+        }
+
+        return redirect("/");
     });
 
     // --- Event detail ---
@@ -722,9 +894,21 @@ int main() {
         if (u.role != "admin")
             return require_admin();
 
+        int max_ev = get_max_events_per_user();
+
         std::ostringstream os;
         os << nav_html(u);
         os << "<h1>Panel admina &mdash; Wydarzenia</h1>";
+
+        os << "<div class=\"section-box\">"
+           << "<h2>Limit zapisow</h2>"
+           << "<form method=\"POST\" action=\"/admin/settings\" style=\"flex-direction:row;align-items:end;gap:10px\">"
+           << "<div>"
+           << "<label>Maks. wydarzen na osobe</label>"
+           << "<input name=\"max_events\" type=\"number\" min=\"1\" max=\"20\" value=\"" << max_ev << "\" required style=\"width:100px\">"
+           << "</div>"
+           << "<button type=\"submit\" class=\"btn btn-sm\">Zapisz</button>"
+           << "</form></div>";
 
         os << "<h2>Utworz wydarzenie</h2>"
            << "<form method=\"POST\" action=\"/admin/event\">"
@@ -776,6 +960,29 @@ int main() {
 
         os << foot;
         return crow::response(os.str());
+    });
+
+    // --- Update settings ---
+    CROW_ROUTE(app, "/admin/settings").methods(crow::HTTPMethod::POST)
+    ([](const crow::request &req) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        User u = get_current_user(req);
+        if (!u.id) return require_login();
+        if (u.role != "admin") return require_admin();
+
+        auto body = crow::query_string("?" + req.body);
+        int val = body.get("max_events") ? std::max(1, std::stoi(body.get("max_events"))) : 3;
+
+        sqlite3_stmt *stmt;
+        sqlite3_prepare_v2(g_db,
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('max_events_per_user', ?)",
+            -1, &stmt, nullptr);
+        std::string sv = std::to_string(val);
+        sqlite3_bind_text(stmt, 1, sv.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+
+        return redirect("/admin");
     });
 
     // --- Create event ---
@@ -1031,7 +1238,7 @@ int main() {
            << "pattern=\"[1-4][A-Ea-e]([1-9]|[12][0-9]|3[0-5])\" "
            << "title=\"Format: cyfra(1-4), litera(A-E), numer(1-35)\" style=\"text-transform:uppercase\">"
            << "<label>Haslo</label>"
-           << "<input name=\"password\" type=\"password\" placeholder=\"Min. 4 znaki\" required minlength=\"4\">"
+           << "<input name=\"password\" type=\"password\" placeholder=\"Haslo\" required minlength=\"1\">"
            << "<label>Rola</label>"
            << "<select name=\"role\"><option value=\"user\">Uzytkownik</option><option value=\"admin\">Admin</option></select>"
            << "<button type=\"submit\" class=\"btn\">Dodaj uzytkownika</button>"
@@ -1161,9 +1368,9 @@ int main() {
            << "<label>Obecne haslo</label>"
            << "<input name=\"old_password\" type=\"password\" required autocomplete=\"current-password\">"
            << "<label>Nowe haslo</label>"
-           << "<input name=\"new_password\" type=\"password\" required minlength=\"4\" autocomplete=\"new-password\">"
+           << "<input name=\"new_password\" type=\"password\" required minlength=\"1\" autocomplete=\"new-password\">"
            << "<label>Powtorz nowe haslo</label>"
-           << "<input name=\"confirm_password\" type=\"password\" required minlength=\"4\" autocomplete=\"new-password\">"
+           << "<input name=\"confirm_password\" type=\"password\" required minlength=\"1\" autocomplete=\"new-password\">"
            << "<button type=\"submit\" class=\"btn\">Zmien haslo</button>"
            << "</form>";
         os << foot;
@@ -1189,8 +1396,8 @@ int main() {
 
         if (!verify_password(old_pass, stored)) {
             os << alert("Nieprawidlowe obecne haslo.", "error");
-        } else if (new_pass.size() < 4) {
-            os << alert("Nowe haslo musi miec co najmniej 4 znaki.", "error");
+        } else if (new_pass.size() < 1) {
+            os << alert("Nowe haslo nie moze byc puste.", "error");
         } else if (new_pass != confirm) {
             os << alert("Nowe hasla nie sa zgodne.", "error");
         } else {
@@ -1211,9 +1418,9 @@ int main() {
            << "<label>Obecne haslo</label>"
            << "<input name=\"old_password\" type=\"password\" required autocomplete=\"current-password\">"
            << "<label>Nowe haslo</label>"
-           << "<input name=\"new_password\" type=\"password\" required minlength=\"4\" autocomplete=\"new-password\">"
+           << "<input name=\"new_password\" type=\"password\" required minlength=\"1\" autocomplete=\"new-password\">"
            << "<label>Powtorz nowe haslo</label>"
-           << "<input name=\"confirm_password\" type=\"password\" required minlength=\"4\" autocomplete=\"new-password\">"
+           << "<input name=\"confirm_password\" type=\"password\" required minlength=\"1\" autocomplete=\"new-password\">"
            << "<button type=\"submit\" class=\"btn\">Zmien haslo</button>"
            << "</form>";
         os << foot;

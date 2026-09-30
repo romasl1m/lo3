@@ -8,8 +8,8 @@ if [[ -z "${SEED_PASSWORD:-}" ]]; then
     echo "Set SEED_PASSWORD to the initial password for generated users." >&2
     exit 1
 fi
-if [[ ${#SEED_PASSWORD} -lt 4 ]]; then
-    echo "SEED_PASSWORD must be at least 4 characters." >&2
+if [[ ${#SEED_PASSWORD} -lt 1 ]]; then
+    echo "SEED_PASSWORD must not be empty." >&2
     exit 1
 fi
 
