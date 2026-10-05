@@ -1,5 +1,5 @@
 # Deployment
-
+# Olek is a vibecoder, me not so
 Vercel serves this app through a Node.js reverse-proxy function. The C++ Crow server and its SQLite database must run separately as a persistent Docker web service; Vercel functions cannot keep this server or a local SQLite database alive. The included `render.yaml` deploys that backend to Render with a persistent disk.
 
 ## Deploy the backend
